@@ -37,20 +37,29 @@ async function fetchLatestPosts() {
   const $ = cheerio.load(res.data);
 
   // 아임웹 게시글 링크는 보통 /{숫자} 형태의 상대경로입니다.
+  // 단, 상단 메뉴(People, Library 등)도 같은 패턴의 링크를 쓰기 때문에
+  // <main> 영역 안의 링크만 사용해서 메뉴를 제외합니다.
   // 실제 마크업이 다를 경우 이 셀렉터를 사이트 구조에 맞게 조정해야 합니다.
   const posts = [];
   const seen = new Set();
 
-  $("a[href]").each((_, el) => {
+  // 제목 끝에 날짜가 붙어서 스크래핑되는 경우가 있어 제거합니다.
+  // 예: "ECB의 정책금리 인상과 물가 안정화 의지26.06.08" -> "ECB의 정책금리 인상과 물가 안정화 의지"
+  // 패턴: 26.06.08 또는 26.06.08-15 형태의 날짜가 문자열 끝에 붙어있는 경우
+  const DATE_SUFFIX_RE = /\s*\d{2}\.\d{2}\.\d{2}(-\d{2})?\s*$/;
+
+  $("main a[href]").each((_, el) => {
     const href = $(el).attr("href") || "";
-    const text = $(el).text().trim();
+    const rawText = $(el).text().trim();
     // 게시글 상세 링크 패턴: 숫자로만 이루어진 경로 (예: /400)
     const match = href.match(/^\/(\d+)$/);
-    if (match && text && !seen.has(match[1])) {
+    if (match && rawText && !seen.has(match[1])) {
       seen.add(match[1]);
-      // 날짜가 함께 딸려오는 경우 줄바꿈으로 분리되어 있어 제목만 취함
-      const title = text.split("\n")[0].trim();
-      if (title.length > 0) {
+      // 날짜가 줄바꿈으로 분리되어 있으면 첫 줄만, 붙어있으면 날짜 패턴 제거
+      let title = rawText.split("\n")[0].trim();
+      title = title.replace(DATE_SUFFIX_RE, "").trim();
+      // 너무 짧은 텍스트(메뉴 항목 등)는 실제 글 제목이 아닐 가능성이 높아 제외
+      if (title.length >= 8) {
         posts.push({
           title,
           url: `https://miraeassetmvp.imweb.me/${match[1]}`,
