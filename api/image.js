@@ -24,12 +24,16 @@ module.exports = async (req, res) => {
       throw new Error("blob not found or empty stream");
     }
 
+    // blob.stream은 Web 표준 ReadableStream이라 Node의 res.pipe()와 바로 호환되지 않을 수 있어,
+    // Response로 감싸서 안전하게 버퍼로 변환한 뒤 전송합니다.
+    const buffer = Buffer.from(await new Response(blob.stream).arrayBuffer());
+
     res.setHeader("Content-Type", "image/png");
     // 카카오/브라우저가 반복 요청할 때 매번 다시 안 받아오도록 캐싱 (1시간)
     res.setHeader("Cache-Control", "public, max-age=3600");
-    blob.stream.pipe(res);
+    res.status(200).send(buffer);
   } catch (err) {
     console.error(`image proxy error for id=${id}:`, err.message);
-    res.status(404).send("image not found");
+    res.status(404).send(`image not found: ${err.message}`);
   }
 };
