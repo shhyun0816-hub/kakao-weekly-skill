@@ -5,6 +5,8 @@
   "description": "MVP 위클리 최신글 5개를 카카오 i 오픈빌더 스킬 응답(listCard)으로 반환하는 Vercel 서버리스 함수",
   "dependencies": {
     "axios": "^1.7.2",
-    "cheerio": "^1.0.0-rc.12"
+    "cheerio": "^1.0.0-rc.12",
+    "sharp": "^0.33.4",
+    "@vercel/blob": "^0.27.0"
   }
 }
