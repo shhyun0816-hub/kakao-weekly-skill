@@ -7,7 +7,7 @@
   ],
   "functions": {
     "api/generate-images.js": {
-      "maxDuration": 60
+      "maxDuration": 90
     }
   }
 }
