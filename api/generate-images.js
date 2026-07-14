@@ -207,27 +207,34 @@ async function imageAlreadyExists(pathname) {
 module.exports = async (req, res) => {
   try {
     const posts = await fetchLatestPosts();
-    const results = [];
 
-    for (const post of posts) {
-      const pathname = `card-${post.id}.png`;
+    // 게시글 5개를 순서대로(하나씩) 처리하면 시간이 너무 오래 걸려 타임아웃이 나므로,
+    // 서로 독립적인 작업이니 한꺼번에(병렬로) 처리해서 전체 시간을 크게 줄임.
+    const results = await Promise.all(
+      posts.map(async (post) => {
+        const pathname = `card-${post.id}.png`;
 
-      if (await imageAlreadyExists(pathname)) {
-        results.push({ id: post.id, status: "cached" });
-        continue;
-      }
+        try {
+          if (await imageAlreadyExists(pathname)) {
+            return { id: post.id, status: "cached" };
+          }
 
-      const bullets = await fetchArticleBullets(post.url);
-      const buffer = await buildSummaryCard(post.title, bullets);
+          const bullets = await fetchArticleBullets(post.url);
+          const buffer = await buildSummaryCard(post.title, bullets);
 
-      const blob = await put(pathname, buffer, {
-        access: "private",
-        addRandomSuffix: false,
-        contentType: "image/png",
-      });
+          const blob = await put(pathname, buffer, {
+            access: "private",
+            addRandomSuffix: false,
+            contentType: "image/png",
+          });
 
-      results.push({ id: post.id, status: "generated", bullets, url: blob.url });
-    }
+          return { id: post.id, status: "generated", bullets, url: blob.url };
+        } catch (err) {
+          console.error(`failed for post ${post.id}:`, err.message);
+          return { id: post.id, status: "error", error: err.message };
+        }
+      })
+    );
 
     res.status(200).json({ ok: true, results });
   } catch (err) {
