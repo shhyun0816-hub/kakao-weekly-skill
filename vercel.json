@@ -4,5 +4,10 @@
       "path": "/api/generate-images",
       "schedule": "0 1 * * *"
     }
-  ]
+  ],
+  "functions": {
+    "api/generate-images.js": {
+      "maxDuration": 60
+    }
+  }
 }
