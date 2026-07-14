@@ -11,6 +11,12 @@ const { head } = require("@vercel/blob");
 const WEEKLY_URL = "https://miraeassetmvp.imweb.me/weekly";
 const MAX_ITEMS = 5;
 
+// 이미지 프록시(api/image)를 절대 URL로 가리키기 위한 이 배포의 공개 도메인.
+// Vercel이 자동으로 채워주는 시스템 환경변수를 사용합니다 (Production Deployment 기준 고정 도메인).
+const SKILL_BASE_URL = process.env.VERCEL_PROJECT_PRODUCTION_URL
+  ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+  : `https://${process.env.VERCEL_URL}`;
+
 // 카카오 스킬은 5초 안에 응답해야 하므로, 응답을 메모리에 잠깐 캐싱해서
 // 같은 서버리스 인스턴스가 재사용될 때 매번 새로 크롤링하지 않도록 함.
 // (서버리스 특성상 완벽한 캐시는 아니며, 완전한 캐시가 필요하면
@@ -32,8 +38,10 @@ async function getImageUrl(postId) {
   }
   try {
     const info = await head(`card-${postId}.png`);
-    imageUrlCache.data[postId] = info.url;
-    return info.url;
+    // private blob 직접 URL 대신, 우리 서버의 공개 프록시 경로를 사용 (Private Blob은 인증 없이 접근 불가)
+    const proxyUrl = `${SKILL_BASE_URL}/api/image?id=${postId}`;
+    imageUrlCache.data[postId] = info ? proxyUrl : null;
+    return imageUrlCache.data[postId];
   } catch {
     // 아직 이미지가 생성되지 않은 경우 (generate-images가 아직 안 돌았을 때) - 이미지 없이 텍스트만 노출
     imageUrlCache.data[postId] = null;
