@@ -51,33 +51,69 @@ async function fetchLatestPosts() {
   return posts.slice(0, MAX_ITEMS);
 }
 
-// 게시글 본문에서 핵심 문장 3개를 뽑아 짧은 요약 문구로 만듦 (AI 없이, 완전 무료)
+// Gemini(무료) API로 본문을 읽고 주제별 핵심 요약 3개를 생성.
+// API 키가 없거나 호출이 실패하면 기존의 "첫 문장 추출" 방식으로 자동 대체됩니다.
+async function summarizeWithGemini(bodyText) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+
+  const prompt =
+    "다음은 금융 뉴스 기사 본문입니다. 핵심 내용을 주제별로 정확히 3개의 짧은 한국어 문장으로 요약해주세요. " +
+    "각 문장은 18자 내외로, 문장을 중간에 자르지 말고 하나의 완결된 의미 단위로 작성하세요. " +
+    "다른 설명 없이 JSON 배열 형식으로만 답변하세요. 예: [\"요약 문장1\", \"요약 문장2\", \"요약 문장3\"]\n\n" +
+    `기사 본문:\n${bodyText.slice(0, 6000)}`;
+
+  const res = await axios.post(
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+    { contents: [{ parts: [{ text: prompt }] }] },
+    {
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      timeout: 15000,
+    }
+  );
+
+  const raw = res.data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  const cleaned = raw.replace(/```json|```/g, "").trim();
+  const parsed = JSON.parse(cleaned);
+  if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("empty gemini result");
+  return parsed.slice(0, 3).map((s) => String(s).trim());
+}
+
+// 게시글 본문에서 핵심 문장 3개를 뽑음. Gemini 요약을 우선 시도하고,
+// 실패하면 문장 단위로 앞부분을 잘라내는 예전 방식으로 대체(항상 결과가 나오도록 함).
 async function fetchArticleBullets(url) {
+  let bodyText = "";
   try {
     const res = await axios.get(url, {
       headers: { "User-Agent": UA, "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8" },
       timeout: 8000,
     });
     const $ = cheerio.load(res.data);
-    const rawText = $("main").text().replace(/\s+/g, " ").trim();
-
-    // 마침표/종결어미 기준으로 문장 분리
-    const sentences = rawText
-      .split(/(?<=[.!?다요])\s+/)
-      .map((s) => s.trim())
-      .filter((s) => {
-        if (s.length < 15 || s.length > 140) return false;
-        // 메뉴/네비게이션성 문구 제외
-        if (/(메뉴|로그인|검색|바로가기|목록|더보기|Copyright|구독)/.test(s)) return false;
-        return true;
-      });
-
-    const bullets = sentences.slice(0, 3).map((s) => (s.length > 30 ? s.slice(0, 30) + "…" : s));
-    return bullets.length > 0 ? bullets : ["자세한 내용은 원문에서 확인해보세요"];
+    bodyText = $("main").text().replace(/\s+/g, " ").trim();
   } catch (err) {
-    console.error(`bullet extraction failed for ${url}:`, err.message);
+    console.error(`article fetch failed for ${url}:`, err.message);
     return ["자세한 내용은 원문에서 확인해보세요"];
   }
+
+  try {
+    const geminiBullets = await summarizeWithGemini(bodyText);
+    if (geminiBullets) return geminiBullets;
+  } catch (err) {
+    console.error(`gemini summarize failed for ${url}:`, err.message);
+  }
+
+  // Gemini를 못 쓰거나 실패한 경우의 대체 로직 (문장 앞부분 추출)
+  const sentences = bodyText
+    .split(/(?<=[.!?다요])\s+/)
+    .map((s) => s.trim())
+    .filter((s) => {
+      if (s.length < 15 || s.length > 140) return false;
+      if (/(메뉴|로그인|검색|바로가기|목록|더보기|Copyright|구독)/.test(s)) return false;
+      return true;
+    });
+
+  const bullets = sentences.slice(0, 3).map((s) => (s.length > 30 ? s.slice(0, 30) + "…" : s));
+  return bullets.length > 0 ? bullets : ["자세한 내용은 원문에서 확인해보세요"];
 }
 
 // 단어(띄어쓰기) 단위로 자연스럽게 줄바꿈 (음절을 억지로 자르지 않음)
