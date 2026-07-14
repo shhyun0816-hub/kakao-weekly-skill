@@ -150,7 +150,7 @@ module.exports = async (req, res) => {
       }
 
       const blob = await put(pathname, buffer, {
-        access: "public",
+        access: "private",
         addRandomSuffix: false,
         contentType: "image/png",
       });
