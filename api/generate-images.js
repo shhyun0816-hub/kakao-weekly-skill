@@ -64,7 +64,7 @@ async function summarizeWithGemini(bodyText) {
     `기사 본문:\n${bodyText.slice(0, 6000)}`;
 
   const res = await axios.post(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
     { contents: [{ parts: [{ text: prompt }] }] },
     {
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
