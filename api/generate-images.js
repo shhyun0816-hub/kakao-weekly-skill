@@ -68,7 +68,7 @@ async function summarizeWithGemini(bodyText) {
     { contents: [{ parts: [{ text: prompt }] }] },
     {
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      timeout: 30000,
+      timeout: 45000,
     }
   );
 
