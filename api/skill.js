@@ -25,8 +25,6 @@ async function fetchLatestPosts() {
 
   const res = await axios.get(WEEKLY_URL, {
     headers: {
-      // 일부 사이트의 봇 차단을 피하기 위해 일반 브라우저처럼 보이는 헤더를 사용합니다.
-      // 그래도 차단될 경우, README의 "대안: 헤드리스 브라우저" 섹션을 참고하세요.
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
       "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
@@ -36,29 +34,19 @@ async function fetchLatestPosts() {
 
   const $ = cheerio.load(res.data);
 
-  // 아임웹 게시글 링크는 보통 /{숫자} 형태의 상대경로입니다.
-  // 단, 상단 메뉴(People, Library 등)도 같은 패턴의 링크를 쓰기 때문에
-  // <main> 영역 안의 링크만 사용해서 메뉴를 제외합니다.
-  // 실제 마크업이 다를 경우 이 셀렉터를 사이트 구조에 맞게 조정해야 합니다.
   const posts = [];
   const seen = new Set();
 
-  // 제목 끝에 날짜가 붙어서 스크래핑되는 경우가 있어 제거합니다.
-  // 예: "ECB의 정책금리 인상과 물가 안정화 의지26.06.08" -> "ECB의 정책금리 인상과 물가 안정화 의지"
-  // 패턴: 26.06.08 또는 26.06.08-15 형태의 날짜가 문자열 끝에 붙어있는 경우
   const DATE_SUFFIX_RE = /\s*\d{2}\.\d{2}\.\d{2}(-\d{2})?\s*$/;
 
   $("main a[href]").each((_, el) => {
     const href = $(el).attr("href") || "";
     const rawText = $(el).text().trim();
-    // 게시글 상세 링크 패턴: 숫자로만 이루어진 경로 (예: /400)
     const match = href.match(/^\/(\d+)$/);
     if (match && rawText && !seen.has(match[1])) {
       seen.add(match[1]);
-      // 날짜가 줄바꿈으로 분리되어 있으면 첫 줄만, 붙어있으면 날짜 패턴 제거
       let title = rawText.split("\n")[0].trim();
       title = title.replace(DATE_SUFFIX_RE, "").trim();
-      // 너무 짧은 텍스트(메뉴 항목 등)는 실제 글 제목이 아닐 가능성이 높아 제외
       if (title.length >= 8) {
         posts.push({
           title,
@@ -66,7 +54,7 @@ async function fetchLatestPosts() {
         });
       }
     }
-    if (posts.length >= MAX_ITEMS) return false; // each 루프 종료
+    if (posts.length >= MAX_ITEMS) return false;
   });
 
   const result = posts.slice(0, MAX_ITEMS);
@@ -74,7 +62,7 @@ async function fetchLatestPosts() {
   return result;
 }
 
-function buildListCardResponse(posts) {
+function buildCarouselResponse(posts) {
   if (!posts || posts.length === 0) {
     return {
       version: "2.0",
@@ -95,21 +83,18 @@ function buildListCardResponse(posts) {
     template: {
       outputs: [
         {
-          listCard: {
-            header: {
-              title: "MVP 위클리 마켓 브리핑",
-            },
+          carousel: {
+            type: "basicCard",
             items: posts.map((p) => ({
               title: p.title,
-              link: { web: p.url },
+              buttons: [
+                {
+                  label: "바로가기",
+                  action: "webLink",
+                  webLinkUrl: p.url,
+                },
+              ],
             })),
-            buttons: [
-              {
-                label: "전체 글 보기",
-                action: "webLink",
-                webLinkUrl: WEEKLY_URL,
-              },
-            ],
           },
         },
       ],
@@ -120,10 +105,9 @@ function buildListCardResponse(posts) {
 module.exports = async (req, res) => {
   try {
     const posts = await fetchLatestPosts();
-    res.status(200).json(buildListCardResponse(posts));
+    res.status(200).json(buildCarouselResponse(posts));
   } catch (err) {
     console.error("skill error:", err.message);
-    // 스킬 서버 오류 시에도 카카오는 200 + fallback 메시지를 기대합니다.
-    res.status(200).json(buildListCardResponse([]));
+    res.status(200).json(buildCarouselResponse([]));
   }
 };
