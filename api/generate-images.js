@@ -67,13 +67,14 @@ async function fetchLatestPosts() {
 
 // Gemini(무료) API로 본문을 읽고 주제별 핵심 요약 3개를 생성.
 // API 키가 없거나 호출이 실패하면 기존의 "첫 문장 추출" 방식으로 자동 대체됩니다.
-async function summarizeWithGemini(bodyText) {
+async function summarizeWithGemini(bodyText, title) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
 
   const prompt =
-    "다음은 금융 뉴스 기사 본문입니다. 핵심 내용을 주제별로 정확히 3개의 짧은 한국어 문장으로 요약해주세요. " +
-    "각 문장은 18자 내외로, 문장을 중간에 자르지 말고 하나의 완결된 의미 단위로 작성하세요. " +
+    "다음은 금융 뉴스 기사 본문입니다. 핵심 내용을 주제별로 정확히 3개의 한국어 문장으로 요약해주세요. " +
+    `기사 제목은 "${title}" 입니다 — 이 제목을 그대로 반복하지 말고, 제목에 없는 구체적인 내용(수치, 배경, 전망 등)을 담아주세요. ` +
+    "각 문장은 35~45자 내외로 작성해서 카드 이미지에서 두 줄 정도 채우는 분량이 되게 해주세요. 문장을 중간에 자르지 말고 완결된 문장으로 작성하세요. " +
     "다른 설명 없이 JSON 배열 형식으로만 답변하세요. 예: [\"요약 문장1\", \"요약 문장2\", \"요약 문장3\"]\n\n" +
     `기사 본문:\n${bodyText.slice(0, 6000)}`;
 
@@ -95,7 +96,7 @@ async function summarizeWithGemini(bodyText) {
 
 // 게시글 본문에서 핵심 문장 3개를 뽑음. Gemini 요약을 우선 시도하고,
 // 실패하면 문장 단위로 앞부분을 잘라내는 예전 방식으로 대체(항상 결과가 나오도록 함).
-async function fetchArticleBullets(url) {
+async function fetchArticleBullets(url, title) {
   let bodyText = "";
   try {
     const res = await axios.get(url, {
@@ -110,23 +111,27 @@ async function fetchArticleBullets(url) {
   }
 
   try {
-    const geminiBullets = await summarizeWithGemini(bodyText);
+    const geminiBullets = await summarizeWithGemini(bodyText, title);
     if (geminiBullets) return geminiBullets;
   } catch (err) {
     console.error(`gemini summarize failed for ${url}:`, err.message);
   }
 
   // Gemini를 못 쓰거나 실패한 경우의 대체 로직 (문장 앞부분 추출)
+  const titleCore = title.replace(/[^가-힣a-zA-Z0-9]/g, "");
   const sentences = bodyText
     .split(/(?<=[.!?다요])\s+/)
     .map((s) => s.trim())
     .filter((s) => {
-      if (s.length < 15 || s.length > 140) return false;
+      if (s.length < 20 || s.length > 140) return false;
       if (/(메뉴|로그인|검색|바로가기|목록|더보기|Copyright|구독)/.test(s)) return false;
+      // 제목과 거의 동일한 문장(제목 반복)은 제외
+      const sCore = s.replace(/[^가-힣a-zA-Z0-9]/g, "");
+      if (titleCore && sCore.includes(titleCore.slice(0, Math.min(10, titleCore.length)))) return false;
       return true;
     });
 
-  const bullets = sentences.slice(0, 3).map((s) => (s.length > 30 ? s.slice(0, 30) + "…" : s));
+  const bullets = sentences.slice(0, 3).map((s) => (s.length > 45 ? s.slice(0, 45) + "…" : s));
   return bullets.length > 0 ? bullets : ["자세한 내용은 원문에서 확인해보세요"];
 }
 
@@ -149,6 +154,20 @@ function wrapByWidth(ctx, text, maxWidth) {
   return lines;
 }
 
+// 제목 줄바꿈: 쉼표(,)처럼 문맥이 끊기는 지점이 있으면 그 지점을 우선으로 두 줄로 나누고,
+// 그 결과가 폭에 맞지 않거나 쉼표가 없으면 일반 단어 단위 줄바꿈으로 대체.
+function wrapTitle(ctx, title, maxWidth) {
+  const commaIdx = title.indexOf(",");
+  if (commaIdx > -1 && commaIdx < title.length - 1) {
+    const first = title.slice(0, commaIdx + 1).trim();
+    const rest = title.slice(commaIdx + 1).trim();
+    if (ctx.measureText(first).width <= maxWidth && ctx.measureText(rest).width <= maxWidth) {
+      return [first, rest];
+    }
+  }
+  return wrapByWidth(ctx, title, maxWidth).slice(0, 2);
+}
+
 // 제목 + 문단별 요약(1~2줄), 각 요약 앞에 '·' 표시가 붙는 카드
 function buildSummaryCard(title, bullets) {
   const canvas = createCanvas(IMG_SIZE, IMG_SIZE);
@@ -165,7 +184,7 @@ function buildSummaryCard(title, bullets) {
   ctx.textBaseline = "alphabetic";
   ctx.fillStyle = "#1e293b";
   ctx.font = '800 42px "Pretendard"';
-  const titleLines = wrapByWidth(ctx, title, IMG_SIZE - 180).slice(0, 2);
+  const titleLines = wrapTitle(ctx, title, IMG_SIZE - 180);
   titleLines.forEach((l, i) => ctx.fillText(l, IMG_SIZE / 2, 120 + i * 54));
   const titleBottom = 120 + (titleLines.length - 1) * 54;
 
@@ -239,7 +258,7 @@ module.exports = async (req, res) => {
             return { id: post.id, status: "cached" };
           }
 
-          const bullets = await fetchArticleBullets(post.url);
+          const bullets = await fetchArticleBullets(post.url, post.title);
           const buffer = await buildSummaryCard(post.title, bullets);
 
           const blob = await put(pathname, buffer, {
