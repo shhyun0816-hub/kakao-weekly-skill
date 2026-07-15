@@ -13,11 +13,19 @@
 
 const axios = require("axios");
 const cheerio = require("cheerio");
-const sharp = require("sharp");
+const { createCanvas, GlobalFonts } = require("@napi-rs/canvas");
+const fs = require("fs");
+const path = require("path");
 const { put, head } = require("@vercel/blob");
 
 const WEEKLY_URL = "https://miraeassetmvp.imweb.me/weekly";
 const MAX_ITEMS = 5;
+
+// Vercel 서버 환경에는 한글 폰트가 기본 설치되어 있지 않아서(글자가 네모 박스로 깨짐),
+// 폰트 파일을 저장소에 직접 포함시켜 명시적으로 등록해서 사용합니다.
+// (SVG의 @font-face 임베드 방식은 사용 중인 렌더러가 지원하지 않아 이 방식으로 변경함)
+GlobalFonts.registerFromPath(path.join(__dirname, "..", "fonts", "Pretendard-Bold.ttf"), "Pretendard");
+GlobalFonts.registerFromPath(path.join(__dirname, "..", "fonts", "Pretendard-Regular.ttf"), "Pretendard");
 const IMG_SIZE = 800;
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -117,13 +125,14 @@ async function fetchArticleBullets(url) {
 }
 
 // 단어(띄어쓰기) 단위로 자연스럽게 줄바꿈 (음절을 억지로 자르지 않음)
-function wrapByWords(text, maxCharsPerLine) {
+// 캔버스 폭 안에서 실제 글자 폭을 측정해 자연스럽게 줄바꿈 (단어 단위)
+function wrapByWidth(ctx, text, maxWidth) {
   const words = text.split(" ");
   const lines = [];
   let current = "";
   for (const w of words) {
     const candidate = current ? `${current} ${w}` : w;
-    if (candidate.length > maxCharsPerLine && current) {
+    if (ctx.measureText(candidate).width > maxWidth && current) {
       lines.push(current);
       current = w;
     } else {
@@ -134,31 +143,47 @@ function wrapByWords(text, maxCharsPerLine) {
   return lines;
 }
 
-function escapeXml(str) {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-const ORANGE = "#f97316";
-
-// 제목 + 문단별 요약(1~2줄), 각 문단 사이는 가운데 '-'로 구분되는 깔끔한 카드
+// 제목 + 문단별 요약(1~2줄), 각 요약 앞에 '·' 표시가 붙는 카드
 function buildSummaryCard(title, bullets) {
-  const titleLines = wrapByWords(escapeXml(title), 15).slice(0, 2);
-  const titleTspans = titleLines
-    .map((l, i) => `<tspan x="${IMG_SIZE / 2}" y="${120 + i * 54}">${l}</tspan>`)
-    .join("");
+  const canvas = createCanvas(IMG_SIZE, IMG_SIZE);
+  const ctx = canvas.getContext("2d");
+
+  // 배경 + 상단 포인트 바
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, IMG_SIZE, IMG_SIZE);
+  ctx.fillStyle = "#1e3a8a";
+  ctx.fillRect(0, 0, IMG_SIZE, 10);
+
+  // 제목 (최대 2줄, 중앙 정렬, 굵게)
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "#1e293b";
+  ctx.font = '800 42px "Pretendard"';
+  const titleLines = wrapByWidth(ctx, title, IMG_SIZE - 180).slice(0, 2);
+  titleLines.forEach((l, i) => ctx.fillText(l, IMG_SIZE / 2, 120 + i * 54));
   const titleBottom = 120 + (titleLines.length - 1) * 54;
 
+  // 구분선
   const dividerY = titleBottom + 40;
+  ctx.strokeStyle = "#e2e8f0";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(90, dividerY);
+  ctx.lineTo(IMG_SIZE - 90, dividerY);
+  ctx.stroke();
+
+  // 요약 항목들 (좌측 정렬, · 접두어)
+  ctx.textAlign = "start";
+  ctx.fillStyle = "#334155";
+  ctx.font = '400 28px "Pretendard"';
+  const MARGIN = 90;
   const lineGap = 40;
-  const items = bullets.slice(0, 3).map((b) => wrapByWords(escapeXml(b), 20).slice(0, 2));
+  const items = bullets.slice(0, 3).map((b) => wrapByWidth(ctx, b, IMG_SIZE - MARGIN * 2).slice(0, 2));
   const totalLines = items.reduce((sum, lines) => sum + lines.length, 0);
   const numGaps = Math.max(items.length - 1, 0);
 
-  // 제목(구분선)과 첫 요약 사이는 한 줄 더 벌리고, 요약 항목 사이 간격은
-  // 전체 내용 길이에 따라 자동으로 좁아지거나 넓어지도록 남은 공간에서 균등 배분
+  // 제목-첫 요약 사이는 한 줄 더 벌리고, 요약 항목 사이 간격은 전체 내용 길이에 맞춰
+  // 남은 공간에서 자동으로 좁아지거나 넓어지도록 균등 배분
   const startY = dividerY + 50 + lineGap;
   const footerLimitY = IMG_SIZE - 110;
   const contentHeight = totalLines * lineGap;
@@ -166,33 +191,22 @@ function buildSummaryCard(title, bullets) {
   const blockGap = numGaps > 0 ? Math.max(30, Math.min(120, availableGapSpace / numGaps)) : 0;
 
   let y = startY;
-  const parts = [];
-  const MARGIN = 90;
-
   items.forEach((lines, i) => {
     lines.forEach((l, j) => {
       const prefix = j === 0 ? "· " : "  ";
-      parts.push(
-        `<text x="${MARGIN}" y="${y}" font-family="sans-serif" font-size="28" fill="#334155" text-anchor="start">${prefix}${l}</text>`
-      );
+      ctx.fillText(`${prefix}${l}`, MARGIN, y);
       y += lineGap;
     });
     if (i < items.length - 1) y += blockGap;
   });
 
-  const svg = `
-  <svg width="${IMG_SIZE}" height="${IMG_SIZE}" xmlns="http://www.w3.org/2000/svg">
-    <rect width="${IMG_SIZE}" height="${IMG_SIZE}" fill="#ffffff"/>
-    <rect width="${IMG_SIZE}" height="10" fill="#1e3a8a"/>
-    <text font-family="sans-serif" font-size="42" font-weight="800" fill="#1e293b"
-      text-anchor="middle">${titleTspans}</text>
-    <line x1="90" y1="${dividerY}" x2="${IMG_SIZE - 90}" y2="${dividerY}" stroke="#e2e8f0" stroke-width="2"/>
-    ${parts.join("")}
-    <text x="${IMG_SIZE - 40}" y="${IMG_SIZE - 30}" font-family="sans-serif" font-size="22"
-      fill="#cbd5e1" text-anchor="end">MVP 위클리</text>
-  </svg>`;
+  // 우측 하단 브랜드 라벨
+  ctx.textAlign = "end";
+  ctx.fillStyle = "#cbd5e1";
+  ctx.font = '400 22px "Pretendard"';
+  ctx.fillText("MVP 위클리", IMG_SIZE - 40, IMG_SIZE - 30);
 
-  return sharp(Buffer.from(svg)).png().toBuffer();
+  return canvas.toBuffer("image/png");
 }
 
 async function imageAlreadyExists(pathname) {
