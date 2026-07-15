@@ -7,7 +7,8 @@
   ],
   "functions": {
     "api/generate-images.js": {
-      "maxDuration": 90
+      "maxDuration": 90,
+      "includeFiles": "api/fonts/**"
     }
   }
 }
