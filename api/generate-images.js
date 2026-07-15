@@ -24,11 +24,12 @@ const MAX_ITEMS = 5;
 // Vercel 서버 환경에는 한글 폰트가 기본 설치되어 있지 않아서(글자가 네모 박스로 깨짐),
 // 폰트 파일을 저장소에 직접 포함시켜 명시적으로 등록해서 사용합니다.
 // (SVG의 @font-face 임베드 방식은 사용 중인 렌더러가 지원하지 않아 이 방식으로 변경함)
+let fontRegistrationError = null;
 try {
   GlobalFonts.registerFromPath(path.join(__dirname, "fonts", "Pretendard-Bold.ttf"), "Pretendard");
   GlobalFonts.registerFromPath(path.join(__dirname, "fonts", "Pretendard-Regular.ttf"), "Pretendard");
-  console.log("font registered. families include Pretendard:", GlobalFonts.has("Pretendard"));
 } catch (err) {
+  fontRegistrationError = err.message;
   console.error("font registration failed:", err.message);
 }
 const IMG_SIZE = 800;
@@ -255,7 +256,18 @@ module.exports = async (req, res) => {
       })
     );
 
-    res.status(200).json({ ok: true, results });
+    res.status(200).json({
+      ok: true,
+      results,
+      debug: {
+        fontRegistrationError,
+        fontHasPretendard: GlobalFonts.has("Pretendard"),
+        fontFiles: {
+          bold: fs.existsSync(path.join(__dirname, "fonts", "Pretendard-Bold.ttf")),
+          regular: fs.existsSync(path.join(__dirname, "fonts", "Pretendard-Regular.ttf")),
+        },
+      },
+    });
   } catch (err) {
     console.error("generate-images error:", err.message);
     res.status(500).json({ ok: false, error: err.message });
