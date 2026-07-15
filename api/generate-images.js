@@ -83,7 +83,7 @@ async function summarizeWithGemini(bodyText, title) {
     { contents: [{ parts: [{ text: prompt }] }] },
     {
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      timeout: 45000,
+      timeout: 25000,
     }
   );
 
@@ -247,33 +247,39 @@ module.exports = async (req, res) => {
   try {
     const posts = await fetchLatestPosts();
 
-    // 게시글 5개를 순서대로(하나씩) 처리하면 시간이 너무 오래 걸려 타임아웃이 나므로,
-    // 서로 독립적인 작업이니 한꺼번에(병렬로) 처리해서 전체 시간을 크게 줄임.
-    const results = await Promise.all(
-      posts.map(async (post) => {
-        const pathname = `card-${post.id}.png`;
+    // 5개를 한꺼번에(완전 병렬) 요청하면 Gemini 무료 API가 순간 부하를 못 견디고
+    // 타임아웃/실패가 잦아지므로, 한 번에 2개씩만 처리해서 안정성을 높임.
+    const CONCURRENCY = 2;
+    const results = [];
+    for (let i = 0; i < posts.length; i += CONCURRENCY) {
+      const batch = posts.slice(i, i + CONCURRENCY);
+      const batchResults = await Promise.all(
+        batch.map(async (post) => {
+          const pathname = `card-${post.id}.png`;
 
-        try {
-          if (await imageAlreadyExists(pathname)) {
-            return { id: post.id, status: "cached" };
+          try {
+            if (await imageAlreadyExists(pathname)) {
+              return { id: post.id, status: "cached" };
+            }
+
+            const bullets = await fetchArticleBullets(post.url, post.title);
+            const buffer = await buildSummaryCard(post.title, bullets);
+
+            const blob = await put(pathname, buffer, {
+              access: "private",
+              addRandomSuffix: false,
+              contentType: "image/png",
+            });
+
+            return { id: post.id, status: "generated", bullets, url: blob.url };
+          } catch (err) {
+            console.error(`failed for post ${post.id}:`, err.message);
+            return { id: post.id, status: "error", error: err.message };
           }
-
-          const bullets = await fetchArticleBullets(post.url, post.title);
-          const buffer = await buildSummaryCard(post.title, bullets);
-
-          const blob = await put(pathname, buffer, {
-            access: "private",
-            addRandomSuffix: false,
-            contentType: "image/png",
-          });
-
-          return { id: post.id, status: "generated", bullets, url: blob.url };
-        } catch (err) {
-          console.error(`failed for post ${post.id}:`, err.message);
-          return { id: post.id, status: "error", error: err.message };
-        }
-      })
-    );
+        })
+      );
+      results.push(...batchResults);
+    }
 
     res.status(200).json({
       ok: true,
